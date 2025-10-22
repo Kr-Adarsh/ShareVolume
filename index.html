@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SEC Data Analysis</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            padding-top: 20px;
+        }
+        .data-card {
+            border-left: 5px solid #007bff;
+            transition: transform 0.3s ease;
+        }
+        .data-card:hover {
+            transform: translateY(-5px);
+        }
+        .value-display {
+            font-size: 2.5rem;
+            font-weight: 700;
+        }
+        .fy-label {
+            font-size: 1rem;
+            padding: 0.5rem 1rem;
+        }
+        .bg-success-custom {
+            background-color: #28a745 !important;
+        }
+        .bg-danger-custom {
+            background-color: #dc3545 !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header class="mb-5 text-center">
+            <h1 id="share-entity-name" class="display-4 fw-bold text-primary">Loading Company Data...</h1>
+            <p class="lead text-muted">Entity Common Stock Shares Outstanding Analysis (Fiscal Years > 2020)</p>
+        </header>
+
+        <div class="row mb-4">
+            <div class="col-12 text-center">
+                <p id="status-message" class="fw-bold text-warning">Initializing application...</p>
+            </div>
+        </div>
+
+        <div id="data-container" class="row g-4" style="display: none;">
+            
+            <!-- Maximum Shares Card -->
+            <div class="col-md-6">
+                <div class="card shadow-lg data-card h-100">
+                    <div class="card-header bg-success-custom text-white">
+                        <h5 class="mb-0">Highest Shares Outstanding</h5>
+                    </div>
+                    <div class="card-body text-center">
+                        <p class="text-uppercase text-muted mb-1">Reported Value (Shares)</p>
+                        <div class="value-display text-success" id="share-max-value">---</div>
+                        <hr class="my-3">
+                        <p class="text-muted mb-1">Fiscal Year</p>
+                        <span class="badge bg-secondary fy-label" id="share-max-fy">---</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Minimum Shares Card -->
+            <div class="col-md-6">
+                <div class="card shadow-lg data-card h-100">
+                    <div class="card-header bg-danger-custom text-white">
+                        <h5 class="mb-0">Lowest Shares Outstanding</h5>
+                    </div>
+                    <div class="card-body text-center">
+                        <p class="text-uppercase text-muted mb-1">Reported Value (Shares)</p>
+                        <div class="value-display text-danger" id="share-min-value">---</div>
+                        <hr class="my-3">
+                        <p class="text-muted mb-1">Fiscal Year</p>
+                        <span class="badge bg-secondary fy-label" id="share-min-fy">---</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <footer class="mt-5 pt-4 border-top text-center text-muted">
+            <p class="small mb-1">Data sourced from SEC EDGAR API.</p>
+            <p class="small">Default CIK: 0001071739 (Centene Corporation). To load alternate data, use the query parameter, e.g., <code>?CIK=0001018724</code>.</p>
+        </footer>
+    </div>
+
+    <script>
+        const DEFAULT_CIK = '0001071739'; 
+        const SEC_API_BASE = 'https://data.sec.gov/api/xbrl/companyconcept/CIK';
+        const ENDPOINT_SUFFIX = '/dei/EntityCommonStockSharesOutstanding.json';
+        // Descriptive User-Agent required by SEC
+        const USER_AGENT = 'CenteneCorporationAnalysis/1.0 (contact@example.com)'; 
+
+        function getCurrentCIK() {
+            const params = new URLSearchParams(window.location.search);
+            let cik = params.get('CIK');
+            if (cik) {
+                // Ensure CIK is 10 digits padded with leading zeros
+                return cik.padStart(10, '0');
+            }
+            return DEFAULT_CIK;
+        }
+
+        async function fetchData(cik) {
+            let url = `${SEC_API_BASE}${cik}${ENDPOINT_SUFFIX}`;
+            let useProxy = cik !== DEFAULT_CIK;
+
+            if (useProxy) {
+                // Use a proxy for alternate CIKs as required by the prompt
+                url = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+            }
+
+            try {
+                // Note: Setting User-Agent client-side is often restricted, 
+                // but included for compliance with SEC requirements.
+                const response = await fetch(url, {
+                    headers: {
+                        'User-Agent': USER_AGENT,
+                        'Accept': 'application/json'
+                    }
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}. Check CIK or API availability.`);
+                }
+
+                const data = await response.json();
+                if (!data.units || !data.units.shares) {
+                     throw new Error("Data structure invalid or missing shares data.");
+                }
+                return data;
+
+            } catch (error) {
+                console.error("Fetch error:", error);
+                throw new Error(`Failed to load data for CIK ${cik}. ${error.message}`);
+            }
+        }
+
+        function processData(data) {
+            const entityName = data.entityName;
+            const shares = data.units.shares || [];
+
+            // Filter: fy > "2020" and val is numeric
+            const filteredShares = shares
+                .filter(item => item.fy > "2020" && typeof item.val === 'number')
+                .map(item => ({
+                    val: item.val,
+                    fy: item.fy
+                }));
+
+            if (filteredShares.length === 0) {
+                throw new Error("No valid share data found after filtering (FY > 2020).");
+            }
+
+            // Find Max and Min
+            let max = filteredShares[0];
+            let min = filteredShares[0];
+
+            for (const item of filteredShares) {
+                if (item.val > max.val) {
+                    max = item;
+                }
+                if (item.val < min.val) {
+                    min = item;
+                }
+            }
+
+            // This structure matches the required data.json output
+            return {
+                entityName: entityName,
+                max: max,
+                min: min
+            };
+        }
+
+        function renderData(processedData) {
+            const { entityName, max, min } = processedData;
+
+            // Update Title and H1
+            document.title = `${entityName} | Shares Outstanding`;
+            document.getElementById('share-entity-name').textContent = entityName;
+
+            // Update Max values
+            document.getElementById('share-max-value').textContent = max.val.toLocaleString('en-US');
+            document.getElementById('share-max-fy').textContent = max.fy;
+
+            // Update Min values
+            document.getElementById('share-min-value').textContent = min.val.toLocaleString('en-US');
+            document.getElementById('share-min-fy').textContent = min.fy;
+        }
+
+        async function initialize() {
+            const currentCIK = getCurrentCIK();
+            const statusElement = document.getElementById('status-message');
+            const dataContainer = document.getElementById('data-container');
+            
+            statusElement.textContent = `Fetching data for CIK ${currentCIK}...`;
+            statusElement.classList.remove('text-success', 'text-danger');
+            statusElement.classList.add('text-warning');
+            dataContainer.style.display = 'none';
+
+            try {
+                const rawData = await fetchData(currentCIK);
+                const processedData = processData(rawData);
+                
+                renderData(processedData);
+                
+                statusElement.textContent = `Data loaded successfully for ${processedData.entityName}.`;
+                statusElement.classList.remove('text-warning', 'text-danger');
+                statusElement.classList.add('text-success');
+                dataContainer.style.display = 'flex';
+
+            } catch (error) {
+                console.error("Initialization error:", error);
+                statusElement.textContent = `Error loading data: ${error.message}`;
+                statusElement.classList.remove('text-success', 'text-warning');
+                statusElement.classList.add('text-danger');
+                dataContainer.style.display = 'none';
+                
+                // Reset entity name if load fails
+                document.getElementById('share-entity-name').textContent = "Data Load Failed";
+                document.title = "Error | SEC Data Analysis";
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', initialize);
+    </script>
+</body>
+</html>
